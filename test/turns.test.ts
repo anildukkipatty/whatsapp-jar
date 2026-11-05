@@ -182,6 +182,17 @@ describe("reply to a message", () => {
     await drain();
   });
 
+  it("doesn't send text the model writes alongside a tool call", async () => {
+    const ref = await makeUser("Acme", "Alice");
+    await send(ref, "hello");
+    fake.handler = (_, index) =>
+      index === 0
+        ? toolUse("search_messages", { query: "a" }, { type: "text", text: "I'll search first." })
+        : text("the answer");
+    await drain();
+    expect((await rows(ref)).filter((m) => m.role === "assistant").map((m) => m.content)).toEqual(["the answer"]);
+  });
+
   it("rejects a reply to a message outside the thread, from the user or the agent", async () => {
     const alice = await makeUser("Acme", "Alice");
     const bob = await makeUser("Acme", "Bob");
@@ -440,6 +451,8 @@ describe("failure", () => {
       request.tool_choice?.type === "none" ? text("best answer I have") : toolUse("search_messages", { query: "x" });
     await drain();
     expect(fake.requests).toHaveLength(12);
+    expect(JSON.stringify(fake.requests[11].messages.at(-1))).toContain("no more tool calls");
+    expect(JSON.stringify(fake.requests[10].messages.at(-1))).not.toContain("no more tool calls");
     expect((await rows(ref)).at(-1)!.content).toBe("best answer I have");
   });
 });

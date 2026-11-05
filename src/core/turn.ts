@@ -23,6 +23,16 @@ class EmptyReplyError extends Error {}
 const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
 
 /**
+ * Blocking tools alone isn't enough: the real model can then end the turn with
+ * no text at all. This goes in the messages rather than the system prompt,
+ * because changing the system prompt mid-turn would invalidate thinking blocks.
+ */
+const LAST_STEP_NOTE: ModelMessage = {
+  role: "user",
+  content: "[System note: no more tool calls are available this turn. Reply now with what you have.]",
+};
+
+/**
  * Thinking blocks are signed against the exact history that produced them, and
  * the rolling window changes that history every turn, so replaying them would
  * get the request rejected. They stay live inside a turn and are dropped here,
@@ -47,8 +57,8 @@ async function runAgent(job: ThreadJob, seen: Set<number>, signal: AbortSignal) 
 
   const batch = renderBatch(inbox, job.timeZone);
   const window = await loadWindow(job, config.historyTokenBudget - estimateTokens([batch]));
-  // Messages picked up mid-turn, by the step they were added before.
-  const injected = new Map<number, ModelMessage>();
+  // Messages added mid-turn, by the step they were added before.
+  const injected = new Map<number, ModelMessage[]>();
 
   // A blank key in .env counts as set for the SDK, which would then call the API with it.
   if (!process.env.ANTHROPIC_API_KEY?.trim()) {
@@ -76,15 +86,20 @@ async function runAgent(job: ThreadJob, seen: Set<number>, signal: AbortSignal) 
       },
     },
     prepareStep: async ({ stepNumber, messages }) => {
-      // On the last allowed step, make the model answer instead of calling another tool.
-      const lastStep = stepNumber === config.maxSteps - 1 ? { toolChoice: "none" as const } : {};
-      if (stepNumber === 0) return lastStep;
+      if (stepNumber === 0) return {};
+      const added: ModelMessage[] = [];
       const arrived = (await loadInbox(job)).filter((message) => !seen.has(message.id));
-      if (!arrived.length) return lastStep;
-      arrived.forEach((message) => seen.add(message.id));
-      const update = renderBatch(arrived, job.timeZone);
-      injected.set(stepNumber, update);
-      return { ...lastStep, messages: [...messages, update] };
+      if (arrived.length) {
+        arrived.forEach((message) => seen.add(message.id));
+        added.push(renderBatch(arrived, job.timeZone));
+      }
+      const lastStep = stepNumber === config.maxSteps - 1;
+      if (lastStep) added.push(LAST_STEP_NOTE);
+      if (added.length) injected.set(stepNumber, added);
+      return {
+        ...(added.length && { messages: [...messages, ...added] }),
+        ...(lastStep && { toolChoice: "none" as const }),
+      };
     },
   });
 
@@ -93,10 +108,7 @@ async function runAgent(job: ThreadJob, seen: Set<number>, signal: AbortSignal) 
 
   const transcript = stripReasoning([
     batch,
-    ...result.steps.flatMap((step, index) => {
-      const update = injected.get(index);
-      return update ? [update, ...step.response.messages] : step.response.messages;
-    }),
+    ...result.steps.flatMap((step, index) => [...(injected.get(index) ?? []), ...step.response.messages]),
   ]);
   await commitTurn(job, [...seen], transcript, replies, "assistant");
 }
@@ -106,11 +118,13 @@ type StepLike = {
   toolResults: Array<{ toolName: string; input: unknown; output: unknown }>;
 };
 
-/** Each step's text and quoted replies, in the order the model produced them. */
+/**
+ * Quoted replies in the order they were sent, then the final text. Text from
+ * earlier steps is the model narrating its tool calls, so it isn't sent.
+ */
 function collectReplies(steps: StepLike[]): Reply[] {
   const replies: Reply[] = [];
   for (const step of steps) {
-    if (step.text.trim()) replies.push({ text: step.text.trim(), replyToId: null });
     for (const result of step.toolResults) {
       if (result.toolName !== "reply_to_message") continue;
       if (!(result.output as { sent?: boolean }).sent) continue;
@@ -118,6 +132,8 @@ function collectReplies(steps: StepLike[]): Reply[] {
       replies.push({ text: input.text, replyToId: input.message_id });
     }
   }
+  const finalText = steps.at(-1)?.text.trim();
+  if (finalText) replies.push({ text: finalText, replyToId: null });
   return replies;
 }
 
