@@ -1,0 +1,60 @@
+# whatsapp-jar
+
+A multi-tenant AI agent chat that behaves like WhatsApp: each user has one endless thread with the agent. Web only for now.
+
+Stack: TypeScript, Next.js, Postgres (plain `pg`, SQL migrations), Vercel AI SDK with `@ai-sdk/anthropic`.
+
+## Run it
+
+Needs Node 22+ and Docker.
+
+```bash
+npm install
+cp .env.example .env     # set SESSION_SECRET (openssl rand -hex 32) and ANTHROPIC_API_KEY
+npm run db:up            # Postgres on 127.0.0.1:5433
+npm run db:migrate
+npm run db:seed          # tenants Acme (Alice, Bob) and Globex (Carol)
+npm run build && npm start
+```
+
+Open http://localhost:3000 and pick a user. Without an API key everything works except replies: the agent posts a notice in the chat.
+
+`npm test` runs the integration suite against a `whatsapp_jar_test` database. It needs `npm run db:up` and no API key, because a fake Anthropic HTTP server stands in for the model.
+
+The worker runs inside the Next.js server, so run it as a long-lived process rather than on serverless functions.
+
+## Layout
+
+- `src/core/` is the chat core, with no web imports.
+- `src/app/` is the web channel: login, API routes and the chat UI.
+- `db/migrations/` is the schema.
+
+A new channel needs two things: call `receiveMessage()` with a `dedupeKey` (a WhatsApp message id, say), and deliver the assistant rows that appear in `messages`. Delivery doesn't exist yet because the web UI simply polls.
+
+## How it works
+
+**Storage.** `messages` is the permanent chat log with timestamps. `turns` holds one row per finished turn, with the exact model transcript including tool calls and results. All tables carry `tenant_id`, and composite foreign keys stop a reply or turn link from crossing a tenant or thread.
+
+**Rolling window.** Each turn the model gets the newest whole turns that fit `HISTORY_TOKEN_BUDGET`, plus the new batch, which is always included. A turn is a single row, so the cut can't split a tool call from its result. Token counts are an estimate of JSON length / 3.
+
+Thinking blocks are not stored. They are signed against the exact history that produced them, and the window changes that history every turn, so replaying them gets a 400 on newer Anthropic accounts. They stay live within a turn.
+
+**Search.** `search_messages` uses a Postgres `tsvector` GIN index that includes `thread_id`, with English stemming. It tries all words, then any word. `read_messages_around` reads the context of a hit. The tools take their thread from the turn, never from model input. Non-English text is matched without stemming, and typos don't match.
+
+**Reply to a message.** `reply_to_id` is stored, and the quoted text is rendered into the user message itself, so it reaches the model even if the original left the window. The agent quotes a message with `reply_to_message`.
+
+**Back-to-back messages.** All state is in Postgres:
+
+1. `receiveMessage()` only stores the message. A user message with `turn_id` NULL is the inbox.
+2. The worker polls every 500ms for threads that have been quiet for `DEBOUNCE_MS` (3s), or whose oldest message has waited `DEBOUNCE_MAX_MS` (15s). The whole inbox becomes one batch, and the prompt tells the agent to handle each request in it.
+3. A lease on the thread row means one turn at a time per thread. It has a heartbeat and expires if the worker dies.
+4. Before each loop step, `prepareStep` adds anything new from the inbox, so a message sent mid-turn joins the running turn. One that lands during the final step stays in the inbox and starts the next turn.
+5. A turn commits in one transaction, and only while the lease is still held. A crash or failure writes nothing, so the messages stay in the inbox and run again. Replies therefore appear when the turn finishes, with no streaming.
+
+Failed turns retry up to 3 times. After that, or on a permanent error, the chat gets a notice and the transcript records that the messages went unanswered, so the thread can't get stuck.
+
+## Not built yet
+
+- Real authentication. Login is a demo user picker with a signed cookie, and anyone who can open `/login` can be anyone.
+- Prompt caching. The current time is in the system prompt, so nothing is cached between turns.
+- Streaming, read receipts and attachments.
