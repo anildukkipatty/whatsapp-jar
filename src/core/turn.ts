@@ -1,8 +1,9 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { APICallError, generateText, isStepCount, LoadAPIKeyError, type ModelMessage } from "ai";
 import { config } from "./config";
-import { tx } from "./db";
+import { db, tx } from "./db";
 import { loadInbox, type ThreadRef } from "./messages";
+import { addStep, emptyUsage, hasUsage, type TurnUsage } from "./pricing";
 import { buildSystemPrompt, renderBatch } from "./prompt";
 import { buildTools } from "./tools";
 import { estimateTokens, loadWindow } from "./window";
@@ -12,6 +13,7 @@ export type ThreadJob = ThreadRef & {
   leaseOwner: string;
   userName: string;
   timeZone: string;
+  carriedUsage: TurnUsage | null;
 };
 
 type Reply = { text: string; replyToId: number | null };
@@ -50,7 +52,7 @@ export function stripReasoning(messages: ModelMessage[]): ModelMessage[] {
 }
 
 /** Runs one turn. Nothing is written until it has fully succeeded. */
-async function runAgent(job: ThreadJob, seen: Set<number>, signal: AbortSignal) {
+async function runAgent(job: ThreadJob, seen: Set<number>, usage: TurnUsage, signal: AbortSignal) {
   const inbox = await loadInbox(job);
   if (!inbox.length) return;
   inbox.forEach((message) => seen.add(message.id));
@@ -85,6 +87,8 @@ async function runAgent(job: ThreadJob, seen: Set<number>, signal: AbortSignal) 
         ...(FALLBACK_MODELS.has(config.model) && { fallbacks: "default" }),
       },
     },
+    // Per step rather than from the result, so usage survives a later step failing.
+    onStepEnd: (step) => addStep(usage, step),
     prepareStep: async ({ stepNumber, messages }) => {
       if (stepNumber === 0) return {};
       const added: ModelMessage[] = [];
@@ -110,7 +114,7 @@ async function runAgent(job: ThreadJob, seen: Set<number>, signal: AbortSignal) 
     batch,
     ...result.steps.flatMap((step, index) => [...(injected.get(index) ?? []), ...step.response.messages]),
   ]);
-  await commitTurn(job, [...seen], transcript, replies, "assistant");
+  await commitTurn(job, [...seen], transcript, replies, "assistant", usage);
 }
 
 type StepLike = {
@@ -147,32 +151,52 @@ async function commitTurn(
   transcript: ModelMessage[],
   replies: Reply[],
   role: "assistant" | "system",
+  usage: TurnUsage,
 ) {
   await tx(async (client) => {
     const fence = await client.query(
-      `UPDATE threads SET attempts = 0, retry_at = NULL
+      `UPDATE threads SET attempts = 0, retry_at = NULL, carried_usage = NULL
        WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3`,
       [job.tenantId, job.threadId, job.leaseOwner],
     );
     if (!fence.rowCount) throw new LeaseLostError();
 
+    const used = hasUsage(usage);
     const { rows } = await client.query(
-      `INSERT INTO turns (tenant_id, thread_id, transcript, token_estimate)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [job.tenantId, job.threadId, JSON.stringify(transcript), estimateTokens(transcript)],
+      `INSERT INTO turns (tenant_id, thread_id, transcript, token_estimate, input_tokens,
+                          output_tokens, cache_read_tokens, cache_write_tokens, cost_usd)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [
+        job.tenantId,
+        job.threadId,
+        JSON.stringify(transcript),
+        estimateTokens(transcript),
+        used ? usage.inputTokens : null,
+        used ? usage.outputTokens : null,
+        used ? usage.cacheReadTokens : null,
+        used ? usage.cacheWriteTokens : null,
+        used ? usage.costUsd : null,
+      ],
     );
     const turnId = rows[0].id;
     await client.query(
       "UPDATE messages SET turn_id = $3 WHERE tenant_id = $1 AND thread_id = $2 AND id = ANY($4::bigint[])",
       [job.tenantId, job.threadId, turnId, messageIds],
     );
+    let lastMessageId = null;
     for (const reply of replies) {
-      await client.query(
+      const inserted = await client.query(
         `INSERT INTO messages (tenant_id, thread_id, role, content, reply_to_id, turn_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
         [job.tenantId, job.threadId, role, reply.text, reply.replyToId, turnId],
       );
+      lastMessageId = inserted.rows[0].id;
     }
+    await client.query("UPDATE turns SET last_message_id = $3 WHERE tenant_id = $1 AND id = $2", [
+      job.tenantId,
+      turnId,
+      lastMessageId,
+    ]);
   });
 }
 
@@ -194,29 +218,39 @@ function failureNotice(error: unknown) {
  * note, so the model later knows they went unanswered and the thread can't get
  * stuck retrying forever.
  */
-async function giveUp(job: ThreadJob, seen: Set<number>, error: unknown) {
+async function giveUp(job: ThreadJob, seen: Set<number>, usage: TurnUsage, error: unknown) {
   const inbox = (await loadInbox(job)).filter((message) => seen.has(message.id));
   if (!inbox.length) return;
   const transcript: ModelMessage[] = [
     renderBatch(inbox, job.timeZone),
     { role: "assistant", content: "[System note: these messages went unanswered because of an error.]" },
   ];
-  await commitTurn(job, [...seen], transcript, [{ text: failureNotice(error), replyToId: null }], "system");
+  await commitTurn(job, [...seen], transcript, [{ text: failureNotice(error), replyToId: null }], "system", usage);
+}
+
+/** Keeps what a failed attempt was billed, so the retry's turn can include it. */
+async function carryUsage(job: ThreadJob, usage: TurnUsage) {
+  await db().query(
+    "UPDATE threads SET carried_usage = $4 WHERE tenant_id = $1 AND id = $2 AND lease_owner = $3",
+    [job.tenantId, job.threadId, job.leaseOwner, JSON.stringify(usage)],
+  );
 }
 
 /** Runs a turn for a leased thread. Returns how long to wait before retrying, if at all. */
 export async function processThread(job: ThreadJob, signal: AbortSignal): Promise<{ retryInMs?: number }> {
   const seen = new Set<number>();
+  const usage = job.carriedUsage ?? emptyUsage();
   try {
-    await runAgent(job, seen, signal);
+    await runAgent(job, seen, usage, signal);
     return {};
   } catch (error) {
     if (error instanceof LeaseLostError) throw error;
     console.error(`[turn] thread ${job.threadId} attempt ${job.attempts + 1} failed:`, error);
     if (isRetryable(error) && job.attempts + 1 < config.maxTurnAttempts) {
+      await carryUsage(job, usage);
       return { retryInMs: config.retryBaseMs * 3 ** job.attempts };
     }
-    await giveUp(job, seen, error);
+    await giveUp(job, seen, usage, error);
     return {};
   }
 }

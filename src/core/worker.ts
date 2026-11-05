@@ -10,7 +10,7 @@ import { processThread, type ThreadJob } from "./turn";
  */
 async function findDueThreads(limit: number) {
   const { rows } = await db().query(
-    `SELECT t.id, t.tenant_id, t.attempts, u.name, u.timezone
+    `SELECT t.id, t.tenant_id, t.attempts, t.carried_usage, u.name, u.timezone
      FROM (
        SELECT thread_id, min(created_at) AS oldest
        FROM messages WHERE role = 'user' AND turn_id IS NULL
@@ -95,6 +95,7 @@ export async function tick() {
       leaseOwner,
       userName: row.name,
       timeZone: row.timezone,
+      carriedUsage: row.carried_usage,
     }).finally(() => running.delete(turn));
     running.add(turn);
   }

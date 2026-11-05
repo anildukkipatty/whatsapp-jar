@@ -16,7 +16,15 @@ export type Request = {
   fallbacks?: unknown;
   [key: string]: unknown;
 };
-export type Reply = { status?: number; content?: Block[]; stop_reason?: string; error?: string };
+export type Reply = {
+  status?: number;
+  content?: Block[];
+  stop_reason?: string;
+  error?: string;
+  usage?: Block;
+  model?: string;
+  stop_details?: Block;
+};
 
 /** Stands in for api.anthropic.com. The real provider and agent loop talk to it over HTTP. */
 export class FakeAnthropic {
@@ -52,11 +60,12 @@ export class FakeAnthropic {
           id: `msg_${index}`,
           type: "message",
           role: "assistant",
-          model: body.model,
+          model: reply.model ?? body.model,
           content,
           stop_reason: reply.stop_reason ?? (content.some((b) => b.type === "tool_use") ? "tool_use" : "end_turn"),
           stop_sequence: null,
-          usage: { input_tokens: 10, output_tokens: 10 },
+          stop_details: reply.stop_details ?? null,
+          usage: reply.usage ?? { input_tokens: 10, output_tokens: 10 },
         }),
       );
     });

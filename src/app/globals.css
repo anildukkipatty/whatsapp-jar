@@ -139,6 +139,8 @@ header {
   overflow-wrap: anywhere;
 }
 
+.usage { margin: 1px 0 6px 2px; font-size: 10.5px; color: #8696a0; }
+
 .typing { display: flex; gap: 4px; padding: 11px 12px; min-width: 0; }
 .typing i {
   width: 7px;

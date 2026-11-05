@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { db, tx } from "./db";
+import type { TurnUsage } from "./pricing";
 
 /** Every core query takes this, so a query can't be written without a tenant. */
 export type ThreadRef = { tenantId: number; threadId: number };
@@ -11,16 +12,22 @@ export type Message = {
   createdAt: Date;
   clientId: string | null;
   replyTo: { id: number; role: "user" | "assistant"; content: string; createdAt: Date } | null;
+  /** Set only on the last message of a turn. For display: never render this into a prompt. */
+  usage: TurnUsage | null;
 };
 
 export class InvalidMessageError extends Error {}
 
 const SELECT_MESSAGE = `
   SELECT m.id, m.role, m.content, m.created_at, m.dedupe_key, m.reply_to_id,
-         q.role AS q_role, q.content AS q_content, q.created_at AS q_created_at
+         q.role AS q_role, q.content AS q_content, q.created_at AS q_created_at,
+         u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
+         u.cost_usd::float8 AS cost_usd
   FROM messages m
   LEFT JOIN messages q
-    ON q.tenant_id = m.tenant_id AND q.thread_id = m.thread_id AND q.id = m.reply_to_id`;
+    ON q.tenant_id = m.tenant_id AND q.thread_id = m.thread_id AND q.id = m.reply_to_id
+  LEFT JOIN turns u
+    ON u.tenant_id = m.tenant_id AND u.thread_id = m.thread_id AND u.last_message_id = m.id`;
 
 type Row = {
   id: number;
@@ -32,6 +39,11 @@ type Row = {
   q_role: "user" | "assistant" | null;
   q_content: string | null;
   q_created_at: Date | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  cost_usd: number | null;
 };
 
 function toMessage(row: Row): Message {
@@ -44,6 +56,16 @@ function toMessage(row: Row): Message {
     replyTo: row.reply_to_id
       ? { id: row.reply_to_id, role: row.q_role!, content: row.q_content!, createdAt: row.q_created_at! }
       : null,
+    usage:
+      row.input_tokens === null
+        ? null
+        : {
+            inputTokens: row.input_tokens,
+            outputTokens: row.output_tokens!,
+            cacheReadTokens: row.cache_read_tokens!,
+            cacheWriteTokens: row.cache_write_tokens!,
+            costUsd: row.cost_usd,
+          },
   };
 }
 

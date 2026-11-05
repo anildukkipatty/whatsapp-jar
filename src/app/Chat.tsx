@@ -4,6 +4,14 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 
 type Quoted = { id: number; role: "user" | "assistant"; content: string; createdAt: string };
 
+type Usage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number | null;
+};
+
 type ChatMessage = {
   id: number | null; // null until the server has stored it
   role: "user" | "assistant" | "system";
@@ -11,6 +19,7 @@ type ChatMessage = {
   createdAt: string;
   clientId: string | null;
   replyTo: Quoted | null;
+  usage?: Usage | null;
   failed?: boolean;
 };
 
@@ -36,6 +45,26 @@ function dayOf(iso: string) {
   if (days === 0) return "Today";
   if (days === 1) return "Yesterday";
   return date.toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" });
+}
+
+function formatCost(cost: number) {
+  if (cost === 0) return "$0";
+  return cost < 0.0001 ? "<$0.0001" : `$${cost.toFixed(4)}`;
+}
+
+/** One line per turn, under its last reply. "in" counts all input, cached included. */
+function UsageLine({ usage }: { usage: Usage }) {
+  const parts = [
+    `${usage.inputTokens.toLocaleString()} in`,
+    `${usage.outputTokens.toLocaleString()} out`,
+    `${usage.cacheReadTokens.toLocaleString()} cached`,
+  ];
+  if (usage.costUsd !== null) parts.push(formatCost(usage.costUsd));
+  return (
+    <div className="usage" title={`Whole turn. Cache writes: ${usage.cacheWriteTokens.toLocaleString()}`}>
+      {parts.join(" · ")}
+    </div>
+  );
 }
 
 export function Chat({ userName, tenantName }: { userName: string; tenantName: string }) {
@@ -282,6 +311,7 @@ export function Chat({ userName, tenantName }: { userName: string; tenantName: s
                   )}
                 </div>
               )}
+              {message.usage && <UsageLine usage={message.usage} />}
             </div>
           );
         })}

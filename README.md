@@ -53,6 +53,10 @@ Thinking blocks are not stored. They are signed against the exact history that p
 
 Failed turns retry up to 3 times. After that, or on a permanent error, the chat gets a notice and the transcript records that the messages went unanswered, so the thread can't get stuck.
 
+**Usage line.** Each turn ends with one small line under its last reply, such as `2,338 in · 135 out · 0 cached · $0.0120`. It totals all the turn's model steps. `in` is all input including cached tokens, and `out` includes thinking.
+
+Usage is stored on the `turns` row, beside the transcript rather than in it, so it can't reach the model, the window or search. Prices are in `src/core/pricing.ts`, and each turn's cost is fixed when the turn commits. A model missing from that table shows tokens with no cost. So does a step where a declined attempt preceded a fallback, because the response doesn't say whether that attempt was billed. Attempts that were billed and then failed are added to the turn that follows. Usage is lost only if a worker crashes or loses its lease mid-turn.
+
 ## Not built yet
 
 - Real authentication. Login is a demo user picker with a signed cookie, and anyone who can open `/login` can be anyone.
