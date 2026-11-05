@@ -14,6 +14,10 @@ export const config = {
   get historyTokenBudget() {
     return intEnv("HISTORY_TOKEN_BUDGET", 24_000);
   },
+  /** Chat replies often come 5 to 60 minutes apart, which a 5-minute cache would miss. */
+  get cacheTtl() {
+    return process.env.PROMPT_CACHE_TTL === "5m" ? ("5m" as const) : ("1h" as const);
+  },
   /** A batch is ready once the thread has been quiet this long... */
   get debounceMs() {
     return intEnv("DEBOUNCE_MS", 3_000);

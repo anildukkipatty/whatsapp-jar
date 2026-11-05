@@ -4,7 +4,7 @@ import { config } from "./config";
 import { db, tx } from "./db";
 import { loadInbox, type ThreadRef } from "./messages";
 import { addStep, emptyUsage, hasUsage, type TurnUsage } from "./pricing";
-import { buildSystemPrompt, renderBatch } from "./prompt";
+import { buildSystemPrompt, renderBatch, renderReminder } from "./prompt";
 import { buildTools } from "./tools";
 import { estimateTokens, loadWindow } from "./window";
 
@@ -51,14 +51,40 @@ export function stripReasoning(messages: ModelMessage[]): ModelMessage[] {
   });
 }
 
+const cacheControl = () => ({ type: "ephemeral" as const, ttl: config.cacheTtl });
+
+/**
+ * Marks the previous turn's batch, where its first request left a cache entry,
+ * so a long tool turn can't push that entry past the 20-block lookback.
+ *
+ * Only on this request's copy. A marker stored in the transcript would come back
+ * on every replay and run past the limit of 4 breakpoints.
+ */
+function withReadPoint(turns: ModelMessage[][]): ModelMessage[] {
+  const previous = turns.at(-1);
+  if (!previous) return [];
+  const [batch, ...rest] = previous;
+  const marked = { ...batch, providerOptions: { anthropic: { cacheControl: cacheControl() } } };
+  return [...turns.slice(0, -1).flat(), marked, ...rest];
+}
+
 /** Runs one turn. Nothing is written until it has fully succeeded. */
 async function runAgent(job: ThreadJob, seen: Set<number>, usage: TurnUsage, signal: AbortSignal) {
   const inbox = await loadInbox(job);
   if (!inbox.length) return;
   inbox.forEach((message) => seen.add(message.id));
 
-  const batch = renderBatch(inbox, job.timeZone);
-  const window = await loadWindow(job, config.historyTokenBudget - estimateTokens([batch]));
+  const window = await loadWindow(
+    job,
+    estimateTokens([renderBatch(inbox, job.timeZone)]),
+    config.historyTokenBudget,
+  );
+  const reminder = renderReminder({
+    timeZone: job.timeZone,
+    now: new Date(),
+    hasOlderHistory: window.hasOlderHistory,
+  });
+  const batch = renderBatch(inbox, job.timeZone, reminder);
   // Messages added mid-turn, by the step they were added before.
   const injected = new Map<number, ModelMessage[]>();
 
@@ -69,13 +95,8 @@ async function runAgent(job: ThreadJob, seen: Set<number>, usage: TurnUsage, sig
   const anthropic = createAnthropic();
   const result = await generateText({
     model: anthropic(config.model),
-    instructions: buildSystemPrompt({
-      userName: job.userName,
-      timeZone: job.timeZone,
-      now: new Date(),
-      hasOlderHistory: window.hasOlderHistory,
-    }),
-    messages: [...window.messages, batch],
+    instructions: buildSystemPrompt(job.userName),
+    messages: [...withReadPoint(window.turns), batch],
     tools: buildTools(job, job.timeZone, () => [...seen]),
     stopWhen: isStepCount(config.maxSteps),
     maxOutputTokens: 16_000,
@@ -84,6 +105,8 @@ async function runAgent(job: ThreadJob, seen: Set<number>, usage: TurnUsage, sig
       anthropic: {
         thinking: { type: "adaptive" },
         effort: config.effort,
+        // Automatic caching: one breakpoint on the last block, moving forward each step.
+        cacheControl: cacheControl(),
         ...(FALLBACK_MODELS.has(config.model) && { fallbacks: "default" }),
       },
     },

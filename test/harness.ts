@@ -109,6 +109,13 @@ function validate(body: Request) {
     }
   });
   if (open.size) problems.push("request ends on an unanswered tool_use");
+
+  const blocks = body.messages.flatMap((m) => (typeof m.content === "string" ? [] : m.content));
+  const marks = blocks.filter((b) => b.cache_control);
+  const auto = body.cache_control as Block | undefined;
+  if (marks.length + (auto ? 1 : 0) > 4) problems.push("more than 4 cache breakpoints");
+  const last = blocks.at(-1)?.cache_control;
+  if (auto && last && last.ttl !== auto.ttl) problems.push("last block has a different TTL from automatic caching");
   return problems;
 }
 
@@ -118,6 +125,14 @@ let toolIds = 0;
 export const toolUse = (name: string, input: Block, ...rest: Block[]): Reply => ({
   content: [...rest, { type: "tool_use", id: `toolu_${++toolIds}`, name, input }],
 });
+
+/** Every message block in order, without cache markers, which aren't part of the cached bytes. */
+export function promptBlocks(request: Request) {
+  return request.messages.flatMap((m) => {
+    const content = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
+    return content.map(({ cache_control, ...block }) => JSON.stringify({ role: m.role, ...block }));
+  });
+}
 
 export function allText(request: Request) {
   return JSON.stringify(request.messages);

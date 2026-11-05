@@ -3,7 +3,7 @@ import { db } from "../src/core/db";
 import { listMessages, type ThreadRef } from "../src/core/messages";
 import { readAround, searchMessages } from "../src/core/search";
 import { buildTools } from "../src/core/tools";
-import { drain, FakeAnthropic, makeUser, resetDb, send, systemText, text, toolResult, toolUse } from "./harness";
+import { drain, FakeAnthropic, makeUser, resetDb, send, text, toolResult, toolUse } from "./harness";
 
 const fake = new FakeAnthropic();
 beforeAll(() => fake.start());
@@ -150,7 +150,7 @@ describe("agent flow", () => {
     delete process.env.HISTORY_TOKEN_BUDGET;
 
     expect(JSON.stringify(fake.requests[0].messages)).not.toContain("4417");
-    expect(systemText(fake.requests[0])).toContain("Older messages exist");
+    expect(JSON.stringify(fake.requests[0].messages.at(-1))).toContain("Older messages exist");
     expect(toolResult(fake.requests[1])).toContain("4417");
     expect(toolResult(fake.requests[1])).toContain("2 Mar 2024");
     expect(toolResult(fake.requests[2])).toContain("the gate code is 4417");

@@ -48,10 +48,8 @@ describe("request to the model", () => {
       "reply_to_message",
       "search_messages",
     ]);
-    const system = systemText(request);
-    expect(system).toContain(String(new Date().getUTCFullYear()));
-    expect(system).toContain("Current date and time");
-    expect(system).toContain("search first");
+    expect(systemText(request)).toContain("search first");
+    expect(JSON.stringify(request.messages.at(-1))).toContain("Current date and time");
   });
 
   it("stores the reply as a message with a timestamp", async () => {
@@ -84,7 +82,7 @@ describe("rolling window", () => {
     expect(seen).not.toContain("turn-1 ");
     expect(seen).toContain("turn-6 ");
     expect(seen).toContain("latest");
-    expect(systemText(request)).toContain("Older messages exist");
+    expect(JSON.stringify(request.messages.at(-1))).toContain("Older messages exist");
     expect(await rows(ref)).toHaveLength(14); // nothing is deleted
   });
 
@@ -96,7 +94,7 @@ describe("rolling window", () => {
       await send(ref, `turn-${i} ${"y".repeat(400)}`);
       await drain();
     }
-    process.env.HISTORY_TOKEN_BUDGET = "700";
+    process.env.HISTORY_TOKEN_BUDGET = "1600";
     fake.reset();
     await send(ref, "latest");
     await drain();
@@ -234,11 +232,12 @@ describe("back-to-back messages", () => {
 
     expect(fake.requests).toHaveLength(1);
     const blocks = fake.requests[0].messages.at(-1)!.content as Block[];
-    expect(blocks.map((b) => b.text.split("\n")[1])).toEqual([
+    expect(blocks.slice(0, 3).map((b) => b.text.split("\n")[1])).toEqual([
       "book a table",
       "also what is 2+2",
       "and remind me about rent",
     ]);
+    expect(blocks[3].text).toContain("<system-reminder>");
     expect(new Set((await rows(ref)).map((m) => m.turn_id)).size).toBe(1);
   });
 

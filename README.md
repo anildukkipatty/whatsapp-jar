@@ -35,9 +35,15 @@ A new channel needs two things: call `receiveMessage()` with a `dedupeKey` (a Wh
 
 **Storage.** `messages` is the permanent chat log with timestamps. `turns` holds one row per finished turn, with the exact model transcript including tool calls and results. All tables carry `tenant_id`, and composite foreign keys stop a reply or turn link from crossing a tenant or thread.
 
-**Rolling window.** Each turn the model gets the newest whole turns that fit `HISTORY_TOKEN_BUDGET`, plus the new batch, which is always included. A turn is a single row, so the cut can't split a tool call from its result. Token counts are an estimate of JSON length / 3.
+**Rolling window.** Each turn the model gets whole turns from the thread's window start, plus the new batch, which is always included. A turn is a single row, so the cut can't split a tool call from its result. When the total passes `HISTORY_TOKEN_BUDGET`, the start jumps forward until the kept turns fit half the budget, and it never moves back. Token counts are an estimate of JSON length / 3.
 
 Thinking blocks are not stored. They are signed against the exact history that produced them, and the window changes that history every turn, so replaying them gets a 400 on newer Anthropic accounts. They stay live within a turn.
+
+**Prompt caching.** The system prompt and tools are identical on every turn. What changes (the current time, and whether older history exists) goes in a `<system-reminder>` block at the end of the batch. That block is stored in the turn's transcript and replayed unchanged, so earlier turns stay byte-identical, and it never enters the `messages` table, so the UI, search and quotes can't see it.
+
+Requests use Anthropic's automatic caching for the moving tail, plus one explicit breakpoint on the previous turn's batch, in case a long tool turn runs past the 20-block lookback. Markers are added to the request only and never stored. Each turn reads up to the previous batch and writes the rest. Everything after that point has to be rewritten anyway because thinking is stripped from replays.
+
+The TTL is 1 hour (`PROMPT_CACHE_TTL=5m` to change it), because chat replies often come 5 to 60 minutes apart. A miss costs 2x input price, so a chat with more than an hour between messages pays more than with no cache. Each window jump also causes one full rewrite, which is why it trims in large steps. The tools and system prompt alone pass Opus 5.5's 512-token minimum, so even a first message caches.
 
 **Search.** `search_messages` uses a Postgres `tsvector` GIN index that includes `thread_id`, with English stemming. It tries all words, then any word. `read_messages_around` reads the context of a hit. The tools take their thread from the turn, never from model input. Non-English text is matched without stemming, and typos don't match.
 
@@ -60,5 +66,4 @@ Usage is stored on the `turns` row, beside the transcript rather than in it, so 
 ## Not built yet
 
 - Real authentication. Login is a demo user picker with a signed cookie, and anyone who can open `/login` can be anyone.
-- Prompt caching. The current time is in the system prompt, so nothing is cached between turns.
 - Streaming, read receipts and attachments.
