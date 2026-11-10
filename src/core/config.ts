@@ -14,6 +14,26 @@ export const config = {
   get historyTokenBudget() {
     return intEnv("HISTORY_TOKEN_BUDGET", 24_000);
   },
+  /** A remote MCP server whose tools the agent can use. Unset means none. */
+  get mcpUrl() {
+    return process.env.MCP_URL?.trim() || "";
+  },
+  /** The server's guide for the model. Defaults to SKILL.md beside the MCP endpoint. */
+  get mcpSkillUrl() {
+    return process.env.MCP_SKILL_URL?.trim() || "";
+  },
+  /** Offer only these tools from the server. Empty means all of them. */
+  get mcpTools() {
+    return new Set((process.env.MCP_TOOLS ?? "").split(",").map((name) => name.trim()).filter(Boolean));
+  },
+  /**
+   * "markets" restricts the agent to Indian market data. "general" leaves it an
+   * open assistant. Markets is the default once an MCP server is connected.
+   */
+  get marketsOnly() {
+    const scope = process.env.AGENT_SCOPE?.trim();
+    return scope ? scope === "markets" : Boolean(this.mcpUrl);
+  },
   /** Chat replies often come 5 to 60 minutes apart, which a 5-minute cache would miss. */
   get cacheTtl() {
     return process.env.PROMPT_CACHE_TTL === "5m" ? ("5m" as const) : ("1h" as const);

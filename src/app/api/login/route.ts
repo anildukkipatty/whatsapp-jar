@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   if (!body.success) return Response.json({ error: "Invalid request" }, { status: 400 });
 
   const { rows } = await db().query(
-    "UPDATE users SET timezone = $2 WHERE id = $1 RETURNING tenant_id, id",
+    "UPDATE users SET timezone = $2 WHERE id = $1 AND whatsapp_id IS NULL RETURNING tenant_id, id",
     [body.data.userId, validTimeZone(body.data.timeZone)],
   );
   if (!rows[0]) return Response.json({ error: "Unknown user" }, { status: 404 });
