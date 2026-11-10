@@ -6,7 +6,16 @@ Stack: TypeScript, Next.js, Postgres (plain `pg`, SQL migrations), Vercel AI SDK
 
 ## Run it
 
-Needs Node 22+ and Docker.
+Needs Node 22+ and Docker Desktop. On a Mac, two scripts do everything:
+
+```bash
+./run-local.sh     # starts Docker Desktop if needed, Postgres, migrations, build, then the app on http://localhost:4000
+./stop-local.sh    # stops the app, Postgres and Docker Desktop (--keep-docker leaves Docker on)
+```
+
+`run-local.sh` creates `.env` with a session secret if it's missing; add `ANTHROPIC_API_KEY` yourself. It runs in the foreground, so Ctrl+C stops the app. `--no-build` skips the build and `PORT=4001` changes the port. `stop-local.sh` keeps the database's data, and leaves Docker Desktop on if other projects' containers are running.
+
+Or step by step:
 
 ```bash
 npm install
@@ -63,7 +72,18 @@ Failed turns retry up to 3 times. After that, or on a permanent error, the chat 
 
 Usage is stored on the `turns` row, beside the transcript rather than in it, so it can't reach the model, the window or search. Prices are in `src/core/pricing.ts`, and each turn's cost is fixed when the turn commits. A model missing from that table shows tokens with no cost. So does a step where a declined attempt preceded a fallback, because the response doesn't say whether that attempt was billed. Attempts that were billed and then failed are added to the turn that follows. Usage is lost only if a worker crashes or loses its lease mid-turn.
 
+**MCP servers.** `mcp.json` lists remote MCP servers (streamable HTTP), in the same shape as other MCP clients use:
+
+```json
+{ "mcpServers": { "dhan": { "url": "https://dhan-mcp-test1.slash.markets", "headers": { "Authorization": "Bearer ${DHAN_MCP_TOKEN}" } } } }
+```
+
+`headers` is optional, and `${VAR}` in a header is read from the environment, so tokens stay in `.env`. The file is read every turn. Each server is connected once per process and its tool list kept, so the tools sent to the model stay byte-identical and the prompt cache holds. Its tools keep their own names, unless a name clashes with a built-in tool or an earlier server, in which case it becomes `<server>__<tool>`. Server instructions go in the system prompt. A server that is down is skipped, retried after 30 seconds, and the chat keeps working without it. A failed call is returned to the model as an error, and the server is reconnected on the next turn. Output is capped at 10,000 characters, so one call can't flood the context or the window. Every tenant shares the same servers. Set `MCP_CONFIG` to use another file, or to empty to turn MCP off.
+
+**Skills.** Each `skills/<name>/SKILL.md` is an [Agent Skill](https://agentskills.io): frontmatter with `name` and `description`, then instructions. The system prompt lists each skill's name and description, and the agent calls `load_skill` to read the instructions when a request matches. The stored transcript keeps a stub instead of the instructions, so a skill doesn't fill later windows. The agent loads it again in a later turn. Skills are read every turn. `skills/slash-markets-dhan/SKILL.md` is a copy of https://dhan-mcp-test1.slash.markets/SKILL.md. Set `SKILLS_DIR` to use another folder, or to empty to turn skills off.
+
 ## Not built yet
 
 - Real authentication. Login is a demo user picker with a signed cookie, and anyone who can open `/login` can be anyone.
 - Streaming, read receipts and attachments.
+- MCP servers over stdio or behind OAuth, MCP resources and prompts, per-tenant servers, and skill files other than `SKILL.md`.

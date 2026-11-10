@@ -12,6 +12,9 @@ export default defineConfig({
       DEBOUNCE_MAX_MS: "1000",
       RETRY_BASE_MS: "50",
       LEASE_MS: "60000",
+      // Off unless a test turns them on, so no test reaches a real MCP server.
+      MCP_CONFIG: "",
+      SKILLS_DIR: "",
     },
   },
 });

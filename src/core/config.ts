@@ -38,6 +38,16 @@ export const config = {
   get retryBaseMs() {
     return intEnv("RETRY_BASE_MS", 5_000);
   },
+  /** MCP server list, relative to the working directory. Empty turns MCP off. */
+  get mcpConfigPath() {
+    return process.env.MCP_CONFIG ?? "mcp.json";
+  },
+  /** Folder of <skill>/SKILL.md files, relative to the working directory. Empty turns skills off. */
+  get skillsDir() {
+    return process.env.SKILLS_DIR ?? "skills";
+  },
+  /** Longest MCP tool output the model sees and the transcript stores, about 3,300 estimated tokens. */
+  maxToolOutputChars: 10_000,
   maxTurnAttempts: 3,
   maxConcurrentTurns: 8,
   maxSteps: 12,

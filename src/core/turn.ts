@@ -2,9 +2,11 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { APICallError, generateText, isStepCount, LoadAPIKeyError, type ModelMessage } from "ai";
 import { config } from "./config";
 import { db, tx } from "./db";
+import { mcpServers, mcpToolSet } from "./mcp";
 import { loadInbox, type ThreadRef } from "./messages";
 import { addStep, emptyUsage, hasUsage, type TurnUsage } from "./pricing";
 import { buildSystemPrompt, renderBatch, renderReminder } from "./prompt";
+import { buildSkillTools, LOAD_SKILL, loadSkills } from "./skills";
 import { buildTools } from "./tools";
 import { estimateTokens, loadWindow } from "./window";
 
@@ -51,6 +53,26 @@ export function stripReasoning(messages: ModelMessage[]): ModelMessage[] {
   });
 }
 
+/**
+ * A loaded skill is thousands of tokens and the model can load it again, so the
+ * stored transcript keeps a stub. That keeps it out of later windows. The
+ * request that saw the full text was this turn's, and the cache is rewritten
+ * past the previous batch anyway, so nothing cached changes.
+ */
+export function stubSkillLoads(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "tool") return message;
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === "tool-result" && part.toolName === LOAD_SKILL && part.output.type === "text"
+          ? { ...part, output: { type: "text" as const, value: "[Skill loaded for that turn. Load it again to see it.]" } }
+          : part,
+      ),
+    };
+  });
+}
+
 const cacheControl = () => ({ type: "ephemeral" as const, ttl: config.cacheTtl });
 
 /**
@@ -92,12 +114,17 @@ async function runAgent(job: ThreadJob, seen: Set<number>, usage: TurnUsage, sig
   if (!process.env.ANTHROPIC_API_KEY?.trim()) {
     throw new LoadAPIKeyError({ message: "ANTHROPIC_API_KEY is not set" });
   }
+  const skills = loadSkills();
+  const services = await mcpServers();
+  const builtIn = { ...buildTools(job, job.timeZone, () => [...seen]), ...buildSkillTools(skills) };
+  const tools = { ...builtIn, ...mcpToolSet(services, Object.keys(builtIn)) };
+
   const anthropic = createAnthropic();
   const result = await generateText({
     model: anthropic(config.model),
-    instructions: buildSystemPrompt(job.userName),
+    instructions: buildSystemPrompt(job.userName, { skills, services }),
     messages: [...withReadPoint(window.turns), batch],
-    tools: buildTools(job, job.timeZone, () => [...seen]),
+    tools,
     stopWhen: isStepCount(config.maxSteps),
     maxOutputTokens: 16_000,
     abortSignal: signal,
@@ -133,10 +160,10 @@ async function runAgent(job: ThreadJob, seen: Set<number>, usage: TurnUsage, sig
   const replies = collectReplies(result.steps);
   if (!replies.length) throw new EmptyReplyError(`No reply, finish reason ${result.finishReason}`);
 
-  const transcript = stripReasoning([
+  const transcript = stripReasoning(stubSkillLoads([
     batch,
     ...result.steps.flatMap((step, index) => [...(injected.get(index) ?? []), ...step.response.messages]),
-  ]);
+  ]));
   await commitTurn(job, [...seen], transcript, replies, "assistant", usage);
 }
 

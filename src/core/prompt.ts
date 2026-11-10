@@ -22,7 +22,38 @@ export function formatTime(date: Date, timeZone: string) {
  * prompt, so any change invalidates the whole prompt cache. Anything that varies
  * belongs in renderReminder instead.
  */
-export function buildSystemPrompt(userName: string) {
+export function buildSystemPrompt(
+  userName: string,
+  extras: { skills?: { name: string; description: string }[]; services?: { name: string; instructions?: string }[] } = {},
+) {
+  return basePrompt(userName) + skillsSection(extras.skills ?? []) + servicesSection(extras.services ?? []);
+}
+
+/**
+ * Only names and descriptions: the full instructions come from load_skill when
+ * needed, so unused skills cost a line each.
+ */
+function skillsSection(skills: { name: string; description: string }[]) {
+  if (!skills.length) return "";
+  return `
+
+## Skills
+A skill is a set of instructions for one kind of task. When a request matches a skill below, call load_skill with its name first and follow what it says. A loaded skill lasts for the current turn only, so load it again in a later turn if you need it.
+${skills.map((skill) => `- ${skill.name}: ${skill.description}`).join("\n")}`;
+}
+
+/** What connected MCP servers say about themselves when they connect. */
+function servicesSection(services: { name: string; instructions?: string }[]) {
+  const described = services.filter((service) => service.instructions);
+  if (!described.length) return "";
+  return `
+
+## Connected services
+Some of your tools come from these services. Their notes:
+${described.map((service) => `- ${service.name}: ${service.instructions}`).join("\n")}`;
+}
+
+function basePrompt(userName: string) {
   return `You are Jar, a personal AI assistant. You talk with ${userName} in a WhatsApp-style chat: one endless thread that never resets. Write the way you would in a chat app: short, natural, plain text without markdown headings.
 
 ## Your memory of this chat
