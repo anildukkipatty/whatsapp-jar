@@ -10,10 +10,8 @@ import { deliverPending, handleIncoming, type Sender } from "./gateway";
  */
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
-if (!waConfig.open && !waConfig.allowedNumbers.size) {
-  // Refusing to guess: on a personal number, "everyone" means all your contacts.
-  throw new Error("Set WHATSAPP_ALLOWED_NUMBERS to the numbers Jar may answer, or WHATSAPP_OPEN=true to answer anyone");
-}
+// With WHATSAPP_OPEN unset, an empty whitelist means Jar answers nobody, which is
+// the safe way to start on a personal number.
 
 const client = await create({
   sessionId: "jar",
@@ -27,7 +25,7 @@ const client = await create({
 console.log(
   waConfig.open
     ? "[whatsapp] connected, answering any number"
-    : `[whatsapp] connected, answering only: ${[...waConfig.allowedNumbers].join(", ")}`,
+    : "[whatsapp] connected, answering only whitelisted numbers (npm run whitelist -- list)",
 );
 
 const sender: Sender = {
@@ -50,12 +48,37 @@ function idOf(quoted: unknown): string | null {
   return typeof serialized === "string" ? serialized : null;
 }
 
+const phoneOfId = (id: unknown) => (typeof id === "string" && id.endsWith("@c.us") ? id.split("@")[0] : null);
+const phoneOfContact = (contact: unknown) => {
+  const { id, phoneNumber } = (contact ?? {}) as { id?: unknown; phoneNumber?: unknown };
+  return phoneOfId(id) ?? phoneOfId(phoneNumber);
+};
+const knownPhones = new Map<string, string>();
+
+/**
+ * The sender's phone number. WhatsApp usually names a chat by an internal id
+ * (…@lid) and the number has to be read from the contact. It can be missing for
+ * someone who hides their number, and that sender then matches no whitelist.
+ */
+async function phoneOf(chatId: string, sender: unknown): Promise<string | null> {
+  const direct = phoneOfId(chatId) ?? phoneOfContact(sender) ?? knownPhones.get(chatId);
+  if (direct) return direct;
+  type ContactId = Parameters<typeof client.getContact>[0];
+  const phone = phoneOfContact(await client.getContact(chatId as ContactId).catch(() => null));
+  if (phone) knownPhones.set(chatId, phone);
+  return phone;
+}
+
 client.onMessage(async (message) => {
   try {
+    const chatId = message.chatId ?? message.from;
+    // Only the whitelist needs the number, and only for chats Jar could answer.
+    const needsPhone = !waConfig.open && !message.fromMe && !message.isGroupMsg;
     await handleIncoming(
       {
         id: message.id,
-        chatId: message.chatId ?? message.from,
+        chatId,
+        phone: needsPhone ? await phoneOf(chatId, message.sender) : null,
         fromMe: message.fromMe,
         isGroup: message.isGroupMsg,
         type: message.type,

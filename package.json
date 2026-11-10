@@ -32,6 +32,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "whatsapp": "tsx --env-file=.env src/whatsapp/main.ts",
+    "whitelist": "tsx --env-file=.env scripts/whitelist.ts",
+    "admin": "tsx --env-file=.env src/whatsapp/admin-main.ts",
     "db:up": "docker compose up -d --wait db",
     "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
     "db:seed": "tsx --env-file=.env scripts/seed.ts"

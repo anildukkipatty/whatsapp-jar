@@ -1,6 +1,7 @@
 import { db } from "../core/db";
 import { getOrCreateThread, InvalidMessageError, receiveMessage, type ThreadRef } from "../core/messages";
 import { waConfig } from "./config";
+import { isWhitelisted } from "./whitelist";
 
 /** What the gateway needs from a WhatsApp message, whichever library produced it. */
 export type Incoming = {
@@ -12,6 +13,12 @@ export type Incoming = {
   type: string;
   text: string;
   senderName?: string | null;
+  /**
+   * The sender's phone number in digits, when the channel knows it. WhatsApp
+   * often gives a chat id that is not a phone number (…@lid), so the whitelist
+   * needs this to recognise the sender.
+   */
+  phone?: string | null;
   /** WhatsApp id of the message this one quotes, if any. */
   quotedId?: string | null;
 };
@@ -51,10 +58,19 @@ const loggedIgnored = new Set<string>();
 /** One-to-one chats only: no groups, status broadcasts or channels. */
 const isDirectChat = (chatId: string) => chatId.endsWith("@c.us") || chatId.endsWith("@lid");
 
-function isAllowed(chatId: string) {
+/**
+ * Open to everyone, or the sender is in WHATSAPP_ALLOWED_NUMBERS or in the
+ * whitelist table. A sender whose phone number is unknown matches neither.
+ */
+async function isAllowed(message: Incoming) {
   if (waConfig.open) return true;
+  const { chatId } = message;
+  const phones = [message.phone, chatId.endsWith("@c.us") ? chatId.split("@")[0] : null].filter(
+    (phone): phone is string => Boolean(phone),
+  );
   const allowed = waConfig.allowedNumbers;
-  return allowed.has(chatId) || allowed.has(chatId.split("@")[0]);
+  if (allowed.has(chatId) || allowed.has(chatId.split("@")[0]) || phones.some((phone) => allowed.has(phone))) return true;
+  return isWhitelisted(phones);
 }
 
 /** The name goes into the system prompt, so it is kept short and on one line. */
@@ -143,10 +159,14 @@ async function notify(sender: Sender, chatId: string, text: string, quotedId?: s
  */
 export async function handleIncoming(message: Incoming, sender: Sender): Promise<Outcome> {
   if (message.fromMe || message.isGroup || !isDirectChat(message.chatId)) return "ignored";
-  if (!isAllowed(message.chatId)) {
+  if (!(await isAllowed(message))) {
     if (!loggedIgnored.has(message.chatId)) {
       loggedIgnored.add(message.chatId);
-      console.log(`[whatsapp] ignoring ${message.chatId}: not in WHATSAPP_ALLOWED_NUMBERS`);
+      console.log(
+        message.phone
+          ? `[whatsapp] ignoring ${message.phone}: not whitelisted`
+          : `[whatsapp] ignoring ${message.chatId}: not whitelisted (WhatsApp did not give its phone number)`,
+      );
     }
     return "ignored";
   }

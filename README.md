@@ -49,14 +49,24 @@ At the first turn the process asks the server for its tools (`tools/list`) and f
 One WhatsApp number is linked by the operator, and people chat with Jar by messaging it. There is no login: a number gets its own user and thread the first time it writes. It uses [open-wa](https://openwa.dev), which drives WhatsApp Web in headless Chrome. That is unofficial, so WhatsApp can ban the number.
 
 ```bash
-# in .env: WHATSAPP_ALLOWED_NUMBERS=919876543210   (or WHATSAPP_OPEN=true)
 npm run db:migrate
+npm run whitelist -- add 919876543210 "Ravi"   # who Jar answers; country code first
 npm run whatsapp         # scan the QR code it prints, once
 ```
 
 Needs Chrome on the machine. The session is saved in `.whatsapp-session/`, which is as sensitive as a password. Run one such process per number, under a supervisor that restarts it: it exits when the session drops. It runs the turn worker itself, so the web server is optional.
 
-**Who is answered.** Only direct chats. Groups, status updates and the number's own messages are ignored. `WHATSAPP_ALLOWED_NUMBERS` limits it to those numbers and `WHATSAPP_OPEN=true` answers anyone. One of the two must be set, because on a personal number "anyone" means all your contacts. If an allowed number is still ignored, the log line shows the chat id WhatsApp used for it, and that id can go in the list as is.
+**Who is answered.** Only direct chats. Groups, status updates and the number's own messages are ignored. Jar answers the numbers in the whitelist table and ignores everyone else, so with an empty whitelist it answers nobody:
+
+```bash
+npm run whitelist -- add 919876543210 "Ravi"   # digits with the country code; the note is optional
+npm run whitelist -- remove 919876543210
+npm run whitelist -- list
+```
+
+A change applies to the next message, with no restart. `WHATSAPP_ALLOWED_NUMBERS` in `.env` adds fixed numbers on top, and `WHATSAPP_OPEN=true` skips the whitelist and answers anyone, which on a personal number means all your contacts. WhatsApp usually names a chat by an internal id (`…@lid`) and not by the phone number, so the number is read from the contact. A sender whose number WhatsApp does not reveal is ignored, and the log says so.
+
+**Whitelist page.** For someone who manages the whitelist without server access, `npm run admin` serves a small page to see, add, edit and delete numbers. It has no login: set `ADMIN_TOKEN` (`openssl rand -hex 24`) and the page is at `http://<host>:8080/whitelist/<ADMIN_TOKEN>`, with every other path answering 404. Whoever has the link can change the list, so share it like a password, and put it behind HTTPS before using it on a network you don't trust. It is a separate process, so restarting it does not touch the WhatsApp link. `ADMIN_PORT` changes the port.
 
 **Limits.** All limits are off unless set, so nobody is restricted by default. The cost of every turn is still recorded on its `turns` row. `WHATSAPP_DAILY_MESSAGES` and `WHATSAPP_DAILY_USD` cap each number per day, resetting at midnight in `WHATSAPP_TIMEZONE` (Asia/Kolkata); 30 messages and $2 are reasonable values for a public number. `WHATSAPP_GLOBAL_DAILY_MESSAGES` and `WHATSAPP_GLOBAL_DAILY_USD` cap all numbers together. With a limit set, a message over it is not stored, and the number gets one notice a day. Cost is known only when a turn finishes, so the dollar limits can overshoot by one turn.
 

@@ -5,3 +5,4 @@ node_modules/
 next-env.d.ts
 .playwright-mcp/
 .whatsapp-session/
+.open-wa/

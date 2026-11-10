@@ -148,7 +148,7 @@ export function toolResult(request: Request) {
 }
 
 export async function resetDb() {
-  await db().query("TRUNCATE tenants, users, threads, turns, messages RESTART IDENTITY CASCADE");
+  await db().query("TRUNCATE tenants, users, threads, turns, messages, whatsapp_whitelist RESTART IDENTITY CASCADE");
 }
 
 export async function makeUser(tenantName: string, userName: string): Promise<ThreadRef> {

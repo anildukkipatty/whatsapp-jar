@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "../src/core/db";
 import { deliverPending, handleIncoming, NOTICES, type Incoming, type Sender } from "../src/whatsapp/gateway";
+import { addToWhitelist, listWhitelist, normalizePhone, removeFromWhitelist } from "../src/whatsapp/whitelist";
 import { drain, FakeAnthropic, makeUser, resetDb, send, text, toolUse } from "./harness";
 
 const fake = new FakeAnthropic();
@@ -120,6 +121,39 @@ describe("incoming messages", () => {
     const users = await db().query("SELECT whatsapp_id FROM users");
     expect(users.rows).toEqual([{ whatsapp_id: ALICE }]);
     expect(sender.sent).toEqual([]);
+  });
+
+  it("answers a number in the whitelist table, also when WhatsApp names the chat by an internal id", async () => {
+    process.env.WHATSAPP_OPEN = "false";
+    const LID = "123456789012345@lid";
+    expect(await addToWhitelist("919000000001", "Alice")).toBe(true);
+
+    expect(await handleIncoming(incoming(ALICE, "hi"), sender)).toBe("accepted");
+    expect(await handleIncoming(incoming(LID, "hi", { phone: "919000000001" }), sender)).toBe("accepted");
+    // Not whitelisted, and an internal id whose phone number is unknown.
+    expect(await handleIncoming(incoming(BOB, "hi"), sender)).toBe("ignored");
+    expect(await handleIncoming(incoming("999999999999999@lid", "hi", { phone: "919000000002" }), sender)).toBe("ignored");
+    expect(await handleIncoming(incoming("888888888888888@lid", "hi"), sender)).toBe("ignored");
+    expect((await stored()).map((m) => m.whatsapp_id)).toEqual([ALICE, LID]);
+  });
+
+  it("applies whitelist changes at once, without a restart", async () => {
+    process.env.WHATSAPP_OPEN = "false";
+    expect(await handleIncoming(incoming(ALICE, "one"), sender)).toBe("ignored");
+    await addToWhitelist("919000000001");
+    expect(await handleIncoming(incoming(ALICE, "two"), sender)).toBe("accepted");
+    expect(await removeFromWhitelist("919000000001")).toBe(true);
+    expect(await handleIncoming(incoming(ALICE, "three"), sender)).toBe("ignored");
+  });
+
+  it("keeps one whitelist row per number and reads numbers however they are typed", async () => {
+    expect(normalizePhone("+91 90000-00001")).toBe("919000000001");
+    expect(normalizePhone("hello")).toBeNull();
+    expect(normalizePhone("12345")).toBeNull();
+    expect(await addToWhitelist("919000000001", "first")).toBe(true);
+    expect(await addToWhitelist("919000000001")).toBe(false);
+    expect((await listWhitelist()).map((e) => [e.phone, e.note])).toEqual([["919000000001", "first"]]);
+    expect(await removeFromWhitelist("919000000002")).toBe(false);
   });
 
   it("answers nobody when it is not open and the allowlist is empty", async () => {
