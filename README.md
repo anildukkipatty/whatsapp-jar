@@ -1,6 +1,6 @@
 # whatsapp-jar
 
-A multi-tenant AI agent chat that behaves like WhatsApp: each user has one endless thread with the agent. Web only for now.
+A multi-tenant AI agent chat that behaves like WhatsApp: each user has one endless thread with the agent. It has a web chat and a WhatsApp channel.
 
 Stack: TypeScript, Next.js, Postgres (plain `pg`, SQL migrations), Vercel AI SDK with `@ai-sdk/anthropic`.
 
@@ -25,11 +25,46 @@ The worker runs inside the Next.js server, so run it as a long-lived process rat
 
 ## Layout
 
-- `src/core/` is the chat core, with no web imports.
+- `src/core/` is the chat core, with no web imports. `mcp.ts` connects it to a remote MCP server.
 - `src/app/` is the web channel: login, API routes and the chat UI.
+- `src/whatsapp/` is the WhatsApp channel. `gateway.ts` is the logic and `main.ts` is the open-wa process.
 - `db/migrations/` is the schema.
 
-A new channel needs two things: call `receiveMessage()` with a `dedupeKey` (a WhatsApp message id, say), and deliver the assistant rows that appear in `messages`. Delivery doesn't exist yet because the web UI simply polls.
+A channel does two things: it calls `receiveMessage()` with a `dedupeKey`, and it delivers the assistant rows that appear in `messages`. The web UI polls for them. WhatsApp sends them.
+
+## Connected MCP server
+
+Set `MCP_URL` and the agent can use that server's tools in every chat, on the web and on WhatsApp. It is built for [slash-dhan-mcp](https://dhan-mcp-test1.slash.markets), which answers Indian market-data questions through a `run_python` tool: the user asks in chat, the agent writes and runs the script on that server, and replies with the result.
+
+At the first turn the process asks the server for its tools (`tools/list`) and fetches its `SKILL.md`, the guide that teaches the model to use them. The tools are offered to the model unchanged and the guide goes at the end of the system prompt. Both are then kept for the life of the process, because a change to either rewrites the prompt cache. Restart to pick up a new server version.
+
+- With `MCP_URL` set the agent is a markets-only analyst: it declines other topics, never claims it can trade, and takes every figure from the tools. `AGENT_SCOPE=general` keeps it an open assistant that also has the tools.
+- The server must speak Streamable HTTP without authentication and answer each request statelessly, as slash-dhan-mcp does.
+- If the server can't be reached at the start, the agent answers without the tools and tries again 30 seconds later. If a tool call fails, the model is told and says so.
+- `MCP_TOOLS` narrows the tools on offer. slash-dhan-mcp also has `create_watcher` and `list_watchers`: watchers alert by email, and the list shows every watcher on that host with its email address, to anyone who asks.
+- The guide adds about 6,000 tokens to every request. Tool calls and results are stored in the turn's transcript, so market questions fill `HISTORY_TOKEN_BUDGET` faster than plain chat.
+
+## WhatsApp
+
+One WhatsApp number is linked by the operator, and people chat with Jar by messaging it. There is no login: a number gets its own user and thread the first time it writes. It uses [open-wa](https://openwa.dev), which drives WhatsApp Web in headless Chrome. That is unofficial, so WhatsApp can ban the number.
+
+```bash
+# in .env: WHATSAPP_ALLOWED_NUMBERS=919876543210   (or WHATSAPP_OPEN=true)
+npm run db:migrate
+npm run whatsapp         # scan the QR code it prints, once
+```
+
+Needs Chrome on the machine. The session is saved in `.whatsapp-session/`, which is as sensitive as a password. Run one such process per number, under a supervisor that restarts it: it exits when the session drops. It runs the turn worker itself, so the web server is optional.
+
+**Who is answered.** Only direct chats. Groups, status updates and the number's own messages are ignored. `WHATSAPP_ALLOWED_NUMBERS` limits it to those numbers and `WHATSAPP_OPEN=true` answers anyone. One of the two must be set, because on a personal number "anyone" means all your contacts. If an allowed number is still ignored, the log line shows the chat id WhatsApp used for it, and that id can go in the list as is.
+
+**Limits.** All limits are off unless set, so nobody is restricted by default. The cost of every turn is still recorded on its `turns` row. `WHATSAPP_DAILY_MESSAGES` and `WHATSAPP_DAILY_USD` cap each number per day, resetting at midnight in `WHATSAPP_TIMEZONE` (Asia/Kolkata); 30 messages and $2 are reasonable values for a public number. `WHATSAPP_GLOBAL_DAILY_MESSAGES` and `WHATSAPP_GLOBAL_DAILY_USD` cap all numbers together. With a limit set, a message over it is not stored, and the number gets one notice a day. Cost is known only when a turn finishes, so the dollar limits can overshoot by one turn.
+
+**Delivery.** Replies waiting to go out are assistant and system rows with `delivered_at` NULL. They are sent oldest first, and a failed send holds back that thread's later replies until it succeeds or fails 5 times. If the process dies between sending and recording it, that reply is sent twice. Quoted replies work both ways. The usage line stays in the web chat.
+
+**Not handled.** Messages sent while the process is down are not picked up afterwards. Media gets a "text only" notice. The user's name is fixed at first contact.
+
+WhatsApp users are left out of the demo login page, so their chats can't be opened from the web.
 
 ## How it works
 
@@ -65,5 +100,5 @@ Usage is stored on the `turns` row, beside the transcript rather than in it, so 
 
 ## Not built yet
 
-- Real authentication. Login is a demo user picker with a signed cookie, and anyone who can open `/login` can be anyone.
+- Real authentication for the web chat. Login is a demo user picker with a signed cookie, and anyone who can open `/login` can be any web user.
 - Streaming, read receipts and attachments.
