@@ -49,7 +49,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 /** The person using the page types numbers by hand, so mistakes get a plain explanation. */
 function readEntry(body: Record<string, unknown>) {
   const phone = normalizePhone(typeof body.phone === "string" ? body.phone : "");
-  if (!phone) throw new BadRequest("Enter the phone number in digits, with the country code. Example: 919876543210");
+  if (!phone) throw new BadRequest("Enter the phone number in digits, with the country code. Example: 910000000000");
   if (phone.length <= 10) {
     throw new BadRequest(`${phone} is missing its country code. For an Indian number, put 91 in front: 91${phone}`);
   }

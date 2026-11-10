@@ -50,7 +50,7 @@ One WhatsApp number is linked by the operator, and people chat with Jar by messa
 
 ```bash
 npm run db:migrate
-npm run whitelist -- add 919876543210 "Ravi"   # who Jar answers; country code first
+npm run whitelist -- add 910000000000 "Test user"   # who Jar answers; country code first
 npm run whatsapp         # scan the QR code it prints, once
 ```
 
@@ -59,8 +59,8 @@ Needs Chrome on the machine. The session is saved in `.whatsapp-session/`, which
 **Who is answered.** Only direct chats. Groups, status updates and the number's own messages are ignored. Jar answers the numbers in the whitelist table and ignores everyone else, so with an empty whitelist it answers nobody:
 
 ```bash
-npm run whitelist -- add 919876543210 "Ravi"   # digits with the country code; the note is optional
-npm run whitelist -- remove 919876543210
+npm run whitelist -- add 910000000000 "Test user"   # digits with the country code; the note is optional
+npm run whitelist -- remove 910000000000
 npm run whitelist -- list
 ```
 

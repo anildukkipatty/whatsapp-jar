@@ -72,11 +72,11 @@ export const ADMIN_PAGE = `<!doctype html>
     <form class="add" id="add">
       <div>
         <label for="phone">Phone number, with country code</label>
-        <input id="phone" name="phone" inputmode="tel" autocomplete="off" placeholder="919876543210" required>
+        <input id="phone" name="phone" inputmode="tel" autocomplete="off" placeholder="910000000000" required>
       </div>
       <div>
         <label for="note">Name or note (optional)</label>
-        <input id="note" name="note" autocomplete="off" maxlength="100" placeholder="Ravi, beta tester">
+        <input id="note" name="note" autocomplete="off" maxlength="100" placeholder="Test user">
       </div>
       <button class="primary" type="submit">Add</button>
     </form>

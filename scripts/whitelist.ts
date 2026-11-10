@@ -4,20 +4,20 @@ import { addToWhitelist, listWhitelist, normalizePhone, removeFromWhitelist } fr
 /**
  * Manages the numbers Jar answers on WhatsApp. No restart is needed afterwards.
  *
- *   npm run whitelist -- add 919876543210 "Ravi, beta tester"
- *   npm run whitelist -- remove 919876543210
+ *   npm run whitelist -- add 910000000000 "Test user"
+ *   npm run whitelist -- remove 910000000000
  *   npm run whitelist -- list
  */
 
 const USAGE = `Usage:
-  npm run whitelist -- add <number> [note]    number with country code, e.g. 919876543210
+  npm run whitelist -- add <number> [note]    number with country code, e.g. 910000000000
   npm run whitelist -- remove <number>
   npm run whitelist -- list`;
 
 function phoneArg(raw: string | undefined) {
   const phone = raw && normalizePhone(raw);
   if (!phone) {
-    console.error(`"${raw ?? ""}" is not a phone number. Give it in digits with the country code, e.g. 919876543210.`);
+    console.error(`"${raw ?? ""}" is not a phone number. Give it in digits with the country code, e.g. 910000000000.`);
     process.exit(1);
   }
   if (phone.length <= 10) {
