@@ -31,6 +31,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "postinstall": "node scripts/patch-open-wa.mjs",
     "whatsapp": "tsx --env-file=.env src/whatsapp/main.ts",
     "whitelist": "tsx --env-file=.env scripts/whitelist.ts",
     "admin": "tsx --env-file=.env src/whatsapp/admin-main.ts",
