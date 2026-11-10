@@ -2,6 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { APICallError, generateText, isStepCount, LoadAPIKeyError, type ModelMessage } from "ai";
 import { config } from "./config";
 import { db, tx } from "./db";
+import { loadMcp } from "./mcp";
 import { loadInbox, type ThreadRef } from "./messages";
 import { addStep, emptyUsage, hasUsage, type TurnUsage } from "./pricing";
 import { buildSystemPrompt, renderBatch, renderReminder } from "./prompt";
@@ -93,11 +94,13 @@ async function runAgent(job: ThreadJob, seen: Set<number>, usage: TurnUsage, sig
     throw new LoadAPIKeyError({ message: "ANTHROPIC_API_KEY is not set" });
   }
   const anthropic = createAnthropic();
+  const mcp = await loadMcp();
   const result = await generateText({
     model: anthropic(config.model),
-    instructions: buildSystemPrompt(job.userName),
+    instructions: buildSystemPrompt(job.userName, mcp.prompt, config.marketsOnly),
     messages: [...withReadPoint(window.turns), batch],
-    tools: buildTools(job, job.timeZone, () => [...seen]),
+    // Jar's own tools win a name clash, so a server can't replace them.
+    tools: { ...mcp.tools, ...buildTools(job, job.timeZone, () => [...seen]) },
     stopWhen: isStepCount(config.maxSteps),
     maxOutputTokens: 16_000,
     abortSignal: signal,

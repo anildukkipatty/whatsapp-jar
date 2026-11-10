@@ -5,9 +5,11 @@ export const dynamic = "force-dynamic";
 
 export default async function Login() {
   // The one deliberately cross-tenant query: this page is the demo user picker.
+  // WhatsApp users are real people, so they are never offered here.
   const { rows } = await db().query(
     `SELECT u.id, u.name, t.name AS tenant_name
      FROM users u JOIN tenants t ON t.id = u.tenant_id
+     WHERE u.whatsapp_id IS NULL
      ORDER BY t.name, u.name`,
   );
   return (

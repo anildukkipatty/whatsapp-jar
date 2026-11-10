@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.97",
+    "@open-wa/wa-automate": "^5.10.0",
     "ai": "^7.0.163",
     "next": "^16.4.5",
     "pg": "^8.23.1",
@@ -30,6 +31,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "whatsapp": "tsx --env-file=.env src/whatsapp/main.ts",
     "db:up": "docker compose up -d --wait db",
     "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
     "db:seed": "tsx --env-file=.env scripts/seed.ts"
